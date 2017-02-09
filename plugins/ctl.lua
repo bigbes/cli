@@ -16,20 +16,14 @@ ffi.cdef[[
     int kill(pid_t pid, int sig);
 ]]
 
-local DEFAULT_TARANTOOLCTL_NAME = 'cli'
 local TIMEOUT_INFINITY = 100 * 365 * 86400
 
 -- return linkmode, instance_name
 -- return nil in case of error
 local function find_instance_name(ctl)
-    local instance_name = fio.basename(ctl.arguments[1], '.lua')
-    if instance_name ~= nil then
-        table.remove(ctl.arguments, 1)
-        return false, instance_name
-    end
-    instance_name = ctl.program_name
-    if type(instance_name) == 'string' and
-       fio.basename(instance_name, '.lua') ~= DEFAULT_TARANTOOLCTL_NAME then
+    local instance_name = nil
+    if ctl.linkmode then
+        instance_name = ctl.program_name
         local stat = fio.lstat(instance_name)
         if stat == nil then
             logger:syserror("failed to stat file '%s'", instance_name)
@@ -39,14 +33,15 @@ local function find_instance_name(ctl)
             logger:error("expected '%s' to be symlink", instance_name)
             return nil
         end
-        return true, fio.basename(ctl.program_name, '.lua')
+        return fio.basename(ctl.program_name, '.lua')
     end
-    return nil
+    return fio.basename(table.remove(ctl.arguments, 1), '.lua')
 end
 
 local function control_prepare_context(ctl, ctx)
     ctx = ctx or {}
     ctx.usermode     = ctl.usermode
+    ctx.linkmode     = ctl.linkmode
     ctx.default_cfg  = {
         pid_file  = ctl:get_config('default_cfg.pid_file' ),
         wal_dir   = ctl:get_config('default_cfg.wal_dir'  ),
@@ -56,11 +51,12 @@ local function control_prepare_context(ctl, ctx)
     }
     ctx.instance_dir = ctl:get_config('instance_dir')
 
-    ctx.linkmode, ctx.instance_name = find_instance_name(ctl)
-    if ctx.linkmode == nil then
+    ctx.instance_name = find_instance_name(ctl)
+    if ctx.instance_name == nil then
         logger:error('Expected to find instance name, got nothing')
         return false
     end
+
     ctx.pid_file_path = ctx.default_cfg.pid_file
     ctx.console_sock_path = fio.pathjoin(
         ctx.pid_file_path,
@@ -371,11 +367,8 @@ local function start(ctx)
             __defer_update = true
         }
         shift_argv(arg, 0, 2)
-        local success, data = dofile(ctx.instance_path)
-        -- if load fails - show last 10 lines of the log file and exit
-        if not success then
-            return 1
-        end
+        -- it may throw error, but we will catch it in start() function
+        dofile(ctx.instance_path)
         return 0
     end
 
@@ -685,7 +678,7 @@ tntctl:register_config('default_cfg.username' , 'string', 'tarantool'           
 tntctl:register_config('instance_dir'         , 'string', '/etc/tarantool/instances.enabled')
 
 local control_library = tntctl:register_library('control', {
-    linkmode = true
+    linkmode = true,
     weight = 10,
 })
 
@@ -697,18 +690,21 @@ control_library:register_method('start', start, {
     header = "%s start <instance_name>",
     linkmode = "%s start",
     weight = 10,
+    exiting = false,
 })
 control_library:register_method('stop', stop, {
     description = [=[ stop Tarantool instance if it's not already stopped. ]=],
     header = "%s stop <instance_name>",
     linkmode = "%s stop",
     weight = 20,
+    exiting = true,
 })
 control_library:register_method('status', status, {
     description = [=[ show status of Tarantool instance. (started/stopped) ]=],
     header = "%s status <instance_name>",
     linkmode = "%s status",
     weight = 30,
+    exiting = true,
 })
 control_library:register_method('restart', restart, {
     description = [=[ stop and start Tarantool instance (if it's already
@@ -716,6 +712,7 @@ control_library:register_method('restart', restart, {
     header = "%s restart <instance_name>",
     linkmode = "%s restart",
     weight = 40,
+    exiting = true,
 })
 control_library:register_method('logrotate', logrotate, {
     description = [=[ rotate log of started Tarantool instance. Works only
@@ -723,18 +720,21 @@ control_library:register_method('logrotate', logrotate, {
     header = "%s logrotate <instance_name>",
     linkmode = "%s logrotate",
     weight = 50,
+    exiting = false,
 })
 control_library:register_method('check', check, {
     description = [=[ Check instance script for syntax errors ]=],
     header = "%s check <instance_name>",
     linkmode = "%s check",
     weight = 60,
+    exiting = true,
 })
 control_library:register_method('enter', enter, {
     description = [=[ enter interactive Lua console of instance. ]=],
     header = "%s enter <instance_name>",
     linkmode = "%s enter",
     weight = 70,
+    exiting = true,
 })
 control_library:register_method('eval', eval, {
     description = [=[ evaluate local file on Tarantool instance (if it's
@@ -748,6 +748,7 @@ control_library:register_method('eval', eval, {
         "<command> | %s eval"
     },
     weight = 80,
+    exiting = true,
 })
 
 tntctl:register_alias('start',     'control.start'    )
@@ -821,8 +822,7 @@ local function connect(ctx)
     return true
 end
 
-local function console_prepare_context(ctl, ctx)
-end
+local function console_prepare_context(ctl, ctx) end
 
 local console_library = tntctl:register_library('console', {
     weight = 20
@@ -837,5 +837,6 @@ console_library:register_method('connect', connect, {
         "<command> | %s connect <instance_uri>"
     },
     weight = 10,
+    exiting = true,
 })
 tntctl:register_alias('connect', 'console.connect')

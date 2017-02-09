@@ -258,6 +258,7 @@ local function xlog_prepare_context(ctl, ctx)
         return keyword_arguments_populate(keyword_arguments)
     end
 
+    logger.stream = io.stderr
     ctx.keyword_arguments = parameters_reparse()
 
     if ctx.command == 'play' then
@@ -305,6 +306,7 @@ xlog_library:register_method('cat', cat, {
         "%s cat <filename>.. [--space=space_no ..] [--show-system]" ..
         " [--from=from_lsn] [--to=to_lsn]",
     weight = 10,
+    exiting = true,
 }
 )
 xlog_library:register_method('play', play, {
@@ -319,6 +321,7 @@ xlog_library:register_method('play', play, {
         "%s play <instance_uri> <filename>.. [--space=space_no ..]" ..
         " [--show-system] [--from=from_lsn] [--to=to_lsn]",
     weight = 20,
+    exiting = true,
 })
 
 tntctl:register_alias('cat',  'xlog.cat' )

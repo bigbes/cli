@@ -107,15 +107,17 @@ ffi.cdef[[
 
 local DEFAULT_DEFAULTS_PATH = '/etc/default/tarantool'
 local DEFAULT_PLUGIN_PATH   = '/etc/tarantool/plugins'
+local DEFAULT_WRAPPER_NAME  = 'cli'
 
 --------------------------------------------------------------------------------
 --                            logging abstraction                             --
 --------------------------------------------------------------------------------
 
+io.stdout:setvbuf('line')
 io.stderr:setvbuf('line')
 
 local default_stream = setmetatable({
-    stream = io.stderr
+    stream = io.stdout
 }, {
     __index = {
         write = function(self, prefix, string)
@@ -133,7 +135,7 @@ local tntlog_stream = setmetatable({
         write = function(self, prefix, string)
             if prefix then
                 if prefix:match("debug") then
-                    return log.error(debug)
+                    return log.debug(string)
                 elseif prefix:match("error") then
                     return log.error(string)
                 end
@@ -384,6 +386,7 @@ local function string_split(path, separator)
    path:gsub("([^" .. separator .. "]+)", function(c) table.insert(fields, c) end)
    return #fields, fields
 end
+
 local function split_config(path)
     local fields = {}
     path:gsub("([^.]+)", function(c) table.insert(fields, c) end)
@@ -562,10 +565,11 @@ local function get_config(self, name)
     return self.cfg:get(name)
 end
 
-constructors.method = function(name, cb)
+constructors.method = function(name, cb, opts)
     return setmetatable({
         name = name,
-        callback = cb
+        callback = cb,
+        opts = opts or {}
     }, {
         __index = {
             run = function(self, ctx)
@@ -573,6 +577,9 @@ constructors.method = function(name, cb)
                 local rv = execute_wrapped(self.callback, ctx)
                 if rv == 'usage' then
                     return self:usage()
+                end
+                if self.exiting or rv == false then
+                    os.exit(rv and 0 or 1)
                 end
                 return rv
             end,
@@ -737,7 +744,7 @@ local tarantoolctl = setmetatable({
             if wrapper == nil then
                 return self:usage(self.command)
             end
-            os.exit(wrapper:run() and 0 or 1)
+            wrapper:run()
         end,
     }
 })
@@ -788,6 +795,10 @@ local function find_defaults_file()
     return user, defaults
 end
 
+local function is_linkmode(program_name)
+    return not (fio.basename(program_name, '.lua') == DEFAULT_WRAPPER_NAME)
+end
+
 local function runner(tctl)
     -- make copy of arguments for modification
     tctl.executable   = arg[-1]
@@ -799,6 +810,7 @@ local function runner(tctl)
     end
     tctl.verbosity    = #tctl.verbosity
     tctl.help         = (tctl.arguments.h or tctl.arguments.help) and true or false
+    tctl.linkmode     = is_linkmode(tctl.program_name)
 
     -- we shouldn't throw errors until this place.
     -- output before that point is kinda buggy
