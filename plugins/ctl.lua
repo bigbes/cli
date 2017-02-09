@@ -684,56 +684,61 @@ tntctl:register_config('default_cfg.logger'   , 'string', '/var/lib/tarantool'  
 tntctl:register_config('default_cfg.username' , 'string', 'tarantool'                       )
 tntctl:register_config('instance_dir'         , 'string', '/etc/tarantool/instances.enabled')
 
-local control_library = tntctl:register_library('control')
+local control_library = tntctl:register_library('control', {
+    linkmode = true
+    weight = 10,
+})
 
 control_library:register_prepare(control_prepare_context)
 
-control_library:register_method('start',     start    , {
+control_library:register_method('start', start, {
+    description = [=[ start Tarantool instance if it's not already started.
+    Tarantool instance should be maintained using tarantoolctl only. ]=],
     header = "%s start <instance_name>",
     linkmode = "%s start",
-    description = [=[
-    start Tarantool instance if it's not already started.
-    Tarantool instance should be maintained using tarantoolctl only.
-    ]=],
     weight = 10,
 })
-control_library:register_method('stop',      stop     , {
+control_library:register_method('stop', stop, {
+    description = [=[ stop Tarantool instance if it's not already stopped. ]=],
     header = "%s stop <instance_name>",
     linkmode = "%s stop",
-    description = [=[
-    stop Tarantool instance if it's not already stopped.
-    ]=],
     weight = 20,
 })
-control_library:register_method('restart',   restart  , {
+control_library:register_method('status', status, {
+    description = [=[ show status of Tarantool instance. (started/stopped) ]=],
+    header = "%s status <instance_name>",
+    linkmode = "%s status",
+    weight = 30,
+})
+control_library:register_method('restart', restart, {
+    description = [=[ stop and start Tarantool instance (if it's already
+    started, fail otherwise) ]=],
     header = "%s restart <instance_name>",
     linkmode = "%s restart",
-    description =
-    [=[
-    stop and start Tarantool instance (if it's already
-    started, fail otherwise)
-    ]=],
     weight = 40,
 })
 control_library:register_method('logrotate', logrotate, {
+    description = [=[ rotate log of started Tarantool instance. Works only
+    if logging is set into file. Pipe/Syslog aren't supported. ]=],
     header = "%s logrotate <instance_name>",
     linkmode = "%s logrotate",
-    description =
-    [=[
-    rotate log of started Tarantool instance. Works only
-    if logging is set into file. Pipe/Syslog aren't supported.
-    ]=],
     weight = 50,
 })
-control_library:register_method('status',    status   , {
-    header = "%s status <instance_name>",
-    linkmode = "%s status",
-    description = [=[
-    show status of Tarantool instance. (started/stopped)
-    ]=],
-    weight = 30,
+control_library:register_method('check', check, {
+    description = [=[ Check instance script for syntax errors ]=],
+    header = "%s check <instance_name>",
+    linkmode = "%s check",
+    weight = 60,
 })
-control_library:register_method('eval',      eval     , {
+control_library:register_method('enter', enter, {
+    description = [=[ enter interactive Lua console of instance. ]=],
+    header = "%s enter <instance_name>",
+    linkmode = "%s enter",
+    weight = 70,
+})
+control_library:register_method('eval', eval, {
+    description = [=[ evaluate local file on Tarantool instance (if it's
+    already started, fail otherwise) ]=],
     header = {
         "%s eval <instance_name> <lua_file>",
         "<command> | %s eval <instance_name>"
@@ -742,30 +747,7 @@ control_library:register_method('eval',      eval     , {
         "%s eval <lua_file>",
         "<command> | %s eval"
     },
-    description =
-    [=[
-    evaluate local file on Tarantool instance (if it's
-    already started, fail otherwise)
-    ]=],
-    weight = 70,
-})
-control_library:register_method('enter',     enter    , {
-    header = "%s enter <instance_name>",
-    linkmode = "%s enter",
-    description =
-    [=[
-    enter interactive Lua console of instance.
-    ]=],
-    weight = 65,
-})
-control_library:register_method('check',     check    , {
-    header = "%s check <instance_name>",
-    linkmode = "%s check",
-    description =
-    [=[
-    Check instance script for syntax errors
-    ]=],
-    weight = 60,
+    weight = 80,
 })
 
 tntctl:register_alias('start',     'control.start'    )
@@ -842,19 +824,18 @@ end
 local function console_prepare_context(ctl, ctx)
 end
 
-local console_library = tntctl:register_library('console')
+local console_library = tntctl:register_library('console', {
+    weight = 20
+})
 console_library:register_prepare(console_prepare_context)
 
 console_library:register_method('connect', connect, {
+    description = [=[ Connect to Tarantool instance on admin/console port.
+    Supports both TCP/Unix sockets. ]=],
     header = {
         "%s connect <instance_uri>",
         "<command> | %s connect <instance_uri>"
     },
-    description =
-    [=[
-    Connect to Tarantool instance on admin/console port.
-    Supports both TCP/Unix sockets.
-    ]=],
-    weight = 80,
+    weight = 10,
 })
 tntctl:register_alias('connect', 'console.connect')

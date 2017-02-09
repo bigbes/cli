@@ -286,42 +286,39 @@ local function xlog_prepare_context(ctl, ctx)
     return true
 end
 
-local xlog_library = tntctl:register_library('xlog')
+local xlog_library = tntctl:register_library('xlog', {
+    weight = 30
+})
 
 xlog_library:register_prepare(xlog_prepare_context)
 
 xlog_library:register_method('cat', cat, {
+    description = [=[ Show contents of snapshot/xlog files.
+
+    * If --space=space_no is passed, then output'll be filtered by space number. May be passed more than once.
+    * If --show-system is passed, then contents of system space'll be showed.
+    * If --from=from_lsn is present, then show operations starting from given lsn.
+    * If --to=to_lsn is present, then show operations ending with given lsn.
+
+    Result is printed to stdout ]=],
     header =
         "%s cat <filename>.. [--space=space_no ..] [--show-system]" ..
         " [--from=from_lsn] [--to=to_lsn]",
-    description =
-    [=[
-    Show contents of snapshot/xlog files.
-
-    * If --space=space_no is passed, then output'll be filtered by space number. May be passed more than once.
-    * If --show-system is passed, then contents of system space'll be showed.
-    * If --from=from_lsn is present, then show operations starting from given lsn.
-    * If --to=to_lsn is present, then show operations ending with given lsn.
-
-    Result is printed to stdout
-    ]=],
-    weight = 90,
+    weight = 10,
 }
 )
 xlog_library:register_method('play', play, {
-    header =
-        "%s play <instance_uri> <filename>.. [--space=space_no ..]" ..
-        " [--show-system] [--from=from_lsn] [--to=to_lsn]",
     description =
-    [=[
-    Play contents of snapshot/xlog files on another Tarantool instance.
+    [=[ Play contents of snapshot/xlog files on another Tarantool instance.
 
     * If --space=space_no is passed, then output'll be filtered by space number. May be passed more than once.
     * If --show-system is passed, then contents of system space'll be showed.
     * If --from=from_lsn is present, then show operations starting from given lsn.
-    * If --to=to_lsn is present, then show operations ending with given lsn.
-    ]=],
-    weight = 100,
+    * If --to=to_lsn is present, then show operations ending with given lsn. ]=],
+    header =
+        "%s play <instance_uri> <filename>.. [--space=space_no ..]" ..
+        " [--show-system] [--from=from_lsn] [--to=to_lsn]",
+    weight = 20,
 })
 
 tntctl:register_alias('cat',  'xlog.cat' )
