@@ -68,16 +68,6 @@ ffi.cdef[[
     struct passwd *getpwnam(const char *login);
 ]]
 
--- arguments (positional one)
--- name     [result name]
--- nargs    [default=1],     -1 for all that's left. may be only one
--- type     [default=STRING] or function
--- callback [default=nil]    or function
--- required [default=false]
---
--- tail arguments (empty or not, converted or not)
-
-
 -- logger
 --   || API:
 --   || write, debug, error (3 levels, for now)
@@ -109,18 +99,23 @@ local DEFAULT_DEFAULTS_PATH = '/etc/default/tarantool'
 local DEFAULT_PLUGIN_PATH   = '/etc/tarantool/plugins'
 local DEFAULT_WRAPPER_NAME  = 'cli'
 
+local tarantoolctl
+
 --------------------------------------------------------------------------------
 --                            logging abstraction                             --
 --------------------------------------------------------------------------------
 
-io.stdout:setvbuf('line')
+-- io.stdout:setvbuf('line')
 io.stderr:setvbuf('line')
 
 local default_stream = setmetatable({
-    stream = io.stdout
+    stream = io.stderr
 }, {
     __index = {
         write = function(self, prefix, string)
+            if prefix == 'error | ' then
+                prefix = ''
+            end
             self.stream:write(prefix, string, '\n')
         end,
         flush = function(self)
@@ -222,14 +217,11 @@ local function logger_new(verbosity)
                     fmt_pos = 3
                     level, fmt = ...
                 end
-                -- print traceback
-                -- self:write_traceback('debug', level)
                 -- format error message
                 local stat = true
                 if select('#', ...) >= fmt_pos then
                     stat, fmt = pcall(
-                        string.format,
-                        select(fmt_pos - 1, ...)
+                        string.format, select(fmt_pos - 1, ...)
                     )
                 end
                 error(fmt, stat == false and 2 or level)
@@ -242,13 +234,10 @@ local function logger_new(verbosity)
                     fmt_pos = 3
                     level, fmt = ...
                 end
-                -- print traceback
-                -- self:write_traceback('debug', level)
                 -- format error message
                 fmt = '[errno %d] ' .. fmt .. ': ' .. errno.strerror()
                 local stat, fmt = pcall(
-                    string.format,
-                    fmt, errno(), select(fmt_pos, ...)
+                    string.format, fmt, errno(), select(fmt_pos, ...)
                 )
                 error(fmt, stat == false and 2 or level)
             end,
@@ -536,25 +525,25 @@ local function register_prepare(self, callback)
     table.insert(self.prepare, callback)
 end
 
-local function register_library(self, name)
-    logger:debug("registering library '%s'", name)
+local function register_library(self, name, opts)
+    logger:debug("registering library '%s'", name, opts)
     if self.libraries[name] ~= nil then
         logger:error("failted to register library. already exists")
         return nil
     end
     assert(self.libraries[name] == nil)
 
-    local lib_instance = constructors.library(name, getmetatable(self).tarantoolctl)
+    local lib_instance = constructors.library(name, opts)
     self.libraries[name] = lib_instance
 
     return lib_instance:plugin_api()
 end
 
-local function register_method(self, name, callback)
+local function register_method(self, name, callback, opts)
     logger:debug("registering method '%s'", name)
     assert(self.methods[name] == nil)
 
-    local meth_instance = constructors.method(name, callback)
+    local meth_instance = constructors.method(name, callback, opts)
     self.methods[name] = meth_instance
 
     return meth_instance:plugin_api()
@@ -565,11 +554,50 @@ local function get_config(self, name)
     return self.cfg:get(name)
 end
 
-constructors.method = function(name, cb, opts)
+local function usage_header()
+    logger:error("Tarantool client utility (%s)", _TARANTOOL)
+    logger:error("Usage:")
+    logger:error("")
+end
+
+local function prepare_description(lines, depth)
+    local fields = {}
+    if lines ~= nil then
+        lines:gsub("([^\n]+)", function(val)
+            local rv = val:gsub("^%s*(.-)%s*$", "%1")
+            local fs = string.byte(rv, 1)
+            if fs ~= 44 and fs ~= 46 and fs ~= 58 and fs ~= 59 then
+                rv = ' ' .. rv
+            end
+            table.insert(fields, rv)
+        end)
+    end
+    lines = table.concat(fields, '')
+    fields = {}
+    while true do
+        if #lines == 0 then break end
+        local line = nil
+        if #lines <= 80 then
+            line = lines
+        else
+            line = lines:sub(0, 80 - depth + 1):match("(.*%s)[^%s]*")
+        end
+        if #line == 0 then
+            line = lines:match(0, 80 - depth) .. '-'
+        end
+        lines = lines:sub(#line + 1)
+        line = line:gsub("^%s*(.-)%s*$", "%1")
+        table.insert(fields, string.rep(' ', depth) .. line)
+    end
+    return fields
+end
+
+constructors.method = function(name, cb, description)
+    -- checks must be here
     return setmetatable({
-        name = name,
-        callback = cb,
-        opts = opts or {}
+        name         = name,
+        callback     = cb,
+        description  = description or {},
     }, {
         __index = {
             run = function(self, ctx)
@@ -583,9 +611,32 @@ constructors.method = function(name, cb, opts)
                 end
                 return rv
             end,
-            usage = function(self)
+            usage = function(self, opts)
+                opts = opts or {}
+                opts.depth = opts.depth or 0
                 -- TODO: write usage function
-                print('usage')
+                -- logger:write('%susage %s [weight %d]',
+                --              string.rep(' ', opts.depth or 0),
+                --              self.name, self.description.weight or 0)
+                local header      = self.description.header
+                local description = self.description.description
+                if type(header) ~= 'table' then
+                    header = { header }
+                end
+                for _, line in ipairs(header) do
+                    logger:write(
+                        string.rep(' ', opts.depth) .. line,
+                        tarantoolctl.program_name
+                    )
+                end
+                if opts.detailed then
+                    for _, line in ipairs(
+                        prepare_description(description, opts.depth + 2)
+                    ) do
+                        logger:write(line)
+                    end
+                    logger:write("")
+                end
                 return false
             end,
             plugin_api = function(self)
@@ -598,14 +649,15 @@ constructors.method = function(name, cb, opts)
     })
 end
 
-constructors.library = function(name, tarantoolctl)
+constructors.library = function(name, description)
     return setmetatable({
-        name = name,
-        command = nil,
-        methods = {},
-        prepare = {},
-        ctx     = {},
-        arguments = tarantoolctl.arguments
+        name        = name,
+        command     = nil,
+        methods     = {},
+        prepare     = {},
+        ctx         = {},
+        description = description or {},
+        arguments   = tarantoolctl.arguments,
     }, {
         __index = {
             plugin_api = function(self)
@@ -619,15 +671,44 @@ constructors.library = function(name, tarantoolctl)
             public_api = function(self)
                 return self
             end,
-            usage = function(self)
+            return_sorted = function(self)
+                local sorted = fun.iter(self.methods):map(function(name, val)
+                    return {val.description.weight or 0, name}
+                end):totable();
+                table.sort(sorted, function(l, r) return l[1] < r[1] end)
+                return fun.iter(sorted):map(function(value)
+                    return self.methods[value[2]]
+                end):totable()
+            end,
+            usage = function(self, opts)
+                opts = opts or {}
+                opts.detailed = opts.detailed or false
+                opts.depth    = opts.depth    or 0
+                opts.header   = opts.header   or false
+
+                local nested = opts.nested
                 if self.command == nil then
-                    logger:error("Expected method name, got nothing")
+                    if nested then
+                        logger:write("%s[%s library]",
+                                    string.rep(' ', opts.depth),
+                                    self.name, self.description.weight)
+                        logger:write("")
+                    else
+                        logger:error("Expected command name, got nothing")
+                        logger:error("")
+                        usage_header()
+                    end
+                    opts.depth = opts.depth + 4
+                    for _, val in ipairs(self:return_sorted()) do
+                        val:usage(opts)
+                    end
+                    opts.depth = opts.depth - 4
                 elseif self.methods[self.command] == nil then
                     logger:error("Command '%s' isn't found in module '%s'",
                                  self.command, name)
+                elseif self.command == nil then
                 end
                 -- TODO: write usage function
-                print('usage')
                 return false
             end,
             run = function(self)
@@ -662,7 +743,7 @@ constructors.library = function(name, tarantoolctl)
     })
 end
 
-local tarantoolctl = setmetatable({
+tarantoolctl = setmetatable({
     libraries = {},
     aliases   = {},
     plugins   = {},
@@ -708,7 +789,6 @@ local tarantoolctl = setmetatable({
                     register_alias   = register_alias,
                     register_config  = register_config
                 },
-                tarantoolctl = self
             })
         end,
         public_api = function(self)
@@ -718,20 +798,41 @@ local tarantoolctl = setmetatable({
                 },
             })
         end,
-        usage = function(self, name)
-            -- TODO: write usage function
-            print('usage')
-            if name == nil then
-                logger:error("expected command name, got nothing")
-                return false
+        usage = function(self, opts)
+            opts = opts or {}
+            opts.detailed = opts.detailed or false
+            opts.depth    = opts.depth    or 0
+            opts.header   = opts.header   or false
+
+            if self.command ~= nil then
+                logger:error("Unknown library or command name '%s'",
+                             self.command)
+                logger:error("")
             end
-            logger:error("unknown command of alias '%s'", name)
+
+            logger:error("Tarantool client utility (%s)", _TARANTOOL)
+            logger:error("Usage:")
+            logger:error("")
+
+            local sorted = fun.iter(self.libraries):map(function(name, val)
+                return {val.description.weight or 0, name}
+            end):totable();
+
+            table.sort(sorted, function(l, r) return l[1] < r[1] end)
+            opts.depth = opts.depth + 4
+            opts.nested = true
+            local lsorted = #sorted
+            fun.iter(sorted):enumerate():each(function(n, val)
+                self.libraries[val[2]]:usage(opts)
+                if n ~= lsorted then logger:write("") end
+            end)
+            opts.depth = opts.depth - 4
             return false
         end,
         run = function(self)
             self.command = table.remove(self.arguments, 1)
             if self.command == nil then
-                self:usage()
+                return self:usage()
             end
             logger:debug('running %s', self.command)
             local alias = self.aliases[self.command]
@@ -742,7 +843,7 @@ local tarantoolctl = setmetatable({
             end
             local wrapper = self.libraries[self.command]
             if wrapper == nil then
-                return self:usage(self.command)
+                return self:usage()
             end
             wrapper:run()
         end,

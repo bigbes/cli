@@ -258,7 +258,7 @@ local function xlog_prepare_context(ctl, ctx)
         return keyword_arguments_populate(keyword_arguments)
     end
 
-    logger.stream = io.stderr
+    -- logger.stream = io.stderr
     ctx.keyword_arguments = parameters_reparse()
 
     if ctx.command == 'play' then
