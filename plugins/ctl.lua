@@ -14,16 +14,21 @@ local console = require('console')
 ffi.cdef[[
     typedef int pid_t;
     int kill(pid_t pid, int sig);
+    int isatty(int fd);
 ]]
 
 local TIMEOUT_INFINITY = 100 * 365 * 86400
 
+local function stdin_isatty()
+    return ffi.C.isatty(0) == 1
+end
+
 -- return linkmode, instance_name
 -- return nil in case of error
-local function find_instance_name(ctl)
+local function find_instance_name(ctx, positional_arguments)
     local instance_name = nil
-    if ctl.linkmode then
-        instance_name = ctl.program_name
+    if ctx.linkmode then
+        instance_name = ctx.program_name
         local stat = fio.lstat(instance_name)
         if stat == nil then
             logger:syserror("failed to stat file '%s'", instance_name)
@@ -33,13 +38,14 @@ local function find_instance_name(ctl)
             logger:error("expected '%s' to be symlink", instance_name)
             return nil
         end
-        return fio.basename(ctl.program_name, '.lua')
+        return fio.basename(ctx.program_name, '.lua')
     end
-    return fio.basename(table.remove(ctl.arguments, 1), '.lua')
+    return fio.basename(table.remove(ctx.positional_arguments, 1), '.lua')
 end
 
 local function control_prepare_context(ctl, ctx)
     ctx = ctx or {}
+    ctx.program_name = ctl.program_name
     ctx.usermode     = ctl.usermode
     ctx.linkmode     = ctl.linkmode
     ctx.default_cfg  = {
@@ -51,7 +57,7 @@ local function control_prepare_context(ctl, ctx)
     }
     ctx.instance_dir = ctl:get_config('instance_dir')
 
-    ctx.instance_name = find_instance_name(ctl)
+    ctx.instance_name = find_instance_name(ctx)
     if ctx.instance_name == nil then
         logger:error('Expected to find instance name, got nothing')
         return false
@@ -93,6 +99,14 @@ local function control_prepare_context(ctl, ctx)
         end
         ctx.groupname = user_info.group.name
     end
+
+    if ctx.command_name == 'eval' then
+        ctx.eval_source = table.remove(ctx.positional_arguments, 1)
+        if ctx.eval_source == nil and stdin_isatty() then
+            logger:error("Error: expected source to evaluate, got nothing")
+            return false
+        end
+    end
     return true
 end
 
@@ -116,10 +130,6 @@ local function read_file(filename)
         i = i + 1
     end
     return table.concat(buf)
-end
-
-local function stdin_isatty()
-    return ffi.C.isatty(0) == 1
 end
 
 local function execute_remote(uri, code)
@@ -575,18 +585,13 @@ end
 local function eval(ctx)
     local function basic_eval(ctx)
         local console_sock_path = ctx.console_sock_path
-        local filename = table.remove(ctx.positional_arguments, 1)
         local code = nil
-        if filename == nil then
-            if stdin_isatty() then
-                -- TODO: we need to call usage here
-                logger:error_xc('usage')
-            end
+        if not ctx.eval_source then
             code = io.stdin:read("*a")
         else
-            code = read_file(filename)
+            code = read_file(ctx.eval_source)
             if code == nil then
-                logger:syserror_xc("failed to open '%s'", filename)
+                logger:syserror_xc("failed to open '%s'", ctx.eval_source)
             end
         end
 
@@ -617,9 +622,6 @@ local function eval(ctx)
     local stat, rv = pcall(basic_eval, ctx)
     if stat == false or (type(rv) == 'number' and rv ~= 0) then
         if type(rv) == 'string' then
-            if rv:match('usage') then
-                logger:error_xc('usage')
-            end
             logger:error("Failed eval command on instance '%s'",
                         ctx.instance_name)
             local rv_debug = nil
@@ -685,7 +687,7 @@ local control_library = tntctl:register_library('control', {
 control_library:register_prepare(control_prepare_context)
 
 control_library:register_method('start', start, {
-    description = [=[ start Tarantool instance if it's not already started.
+    description = [=[ Start Tarantool instance if it's not already started.
     Tarantool instance should be maintained using tarantoolctl only. ]=],
     header = "%s start <instance_name>",
     linkmode = "%s start",
@@ -693,21 +695,21 @@ control_library:register_method('start', start, {
     exiting = false,
 })
 control_library:register_method('stop', stop, {
-    description = [=[ stop Tarantool instance if it's not already stopped. ]=],
+    description = [=[ Stop Tarantool instance if it's not already stopped. ]=],
     header = "%s stop <instance_name>",
     linkmode = "%s stop",
     weight = 20,
     exiting = true,
 })
 control_library:register_method('status', status, {
-    description = [=[ show status of Tarantool instance. (started/stopped) ]=],
+    description = [=[ Show status of Tarantool instance. (started/stopped) ]=],
     header = "%s status <instance_name>",
     linkmode = "%s status",
     weight = 30,
     exiting = true,
 })
 control_library:register_method('restart', restart, {
-    description = [=[ stop and start Tarantool instance (if it's already
+    description = [=[ Stop and start Tarantool instance (if it's already
     started, fail otherwise) ]=],
     header = "%s restart <instance_name>",
     linkmode = "%s restart",
@@ -715,7 +717,7 @@ control_library:register_method('restart', restart, {
     exiting = true,
 })
 control_library:register_method('logrotate', logrotate, {
-    description = [=[ rotate log of started Tarantool instance. Works only
+    description = [=[ Rotate log of started Tarantool instance. Works only
     if logging is set into file. Pipe/Syslog aren't supported. ]=],
     header = "%s logrotate <instance_name>",
     linkmode = "%s logrotate",
@@ -730,14 +732,14 @@ control_library:register_method('check', check, {
     exiting = true,
 })
 control_library:register_method('enter', enter, {
-    description = [=[ enter interactive Lua console of instance. ]=],
+    description = [=[ Enter interactive Lua console of instance. ]=],
     header = "%s enter <instance_name>",
     linkmode = "%s enter",
     weight = 70,
     exiting = true,
 })
 control_library:register_method('eval', eval, {
-    description = [=[ evaluate local file on Tarantool instance (if it's
+    description = [=[ Evaluate local file on Tarantool instance (if it's
     already started, fail otherwise) ]=],
     header = {
         "%s eval <instance_name> <lua_file>",
@@ -765,16 +767,9 @@ tntctl:register_alias('check',     'control.check'    )
 
 local function connect(ctx)
     local function basic_connect(ctx)
-        ctx.remote_host = table.remove(ctx.positional_arguments, 1)
-        if ctx.remote_host == nil then
-            logger:error_xc('usage')
-        end
-        if not stdin_isatty() then
-            local code = io.stdin:read("*a")
-            if code == nil then
-                logger:error_xc('usage')
-            end
-            local status, full_response = execute_remote(ctx.remote_host, code)
+        if ctx.connect_code then
+            local status, full_response = execute_remote(ctx.remote_host,
+                                                         ctx.connect_code)
             if not status then
                 logger:error_xc('failed to connect to tarantool')
             end
@@ -807,9 +802,6 @@ local function connect(ctx)
         logger:error("Failed connecting to remote instance '%s'",
                      ctx.remote_host)
         if type(rv) == 'string' then
-            if rv:match('usage') then
-                logger:error_xc('usage')
-            end
             local rv_debug = nil
             if rv:match(':%d+: ') then
                 rv_debug, rv = rv:match('(.+:%d+): (.+)')
@@ -822,7 +814,25 @@ local function connect(ctx)
     return true
 end
 
-local function console_prepare_context(ctl, ctx) end
+local function console_prepare_context(ctl, ctx)
+    if ctx.command_name == 'connect' then
+        ctx.connect_endpoint = table.remove(ctx.positional_arguments, 1)
+        if ctx.connect_endpoint == nil then
+            logger:error("Expected URI to connect to")
+            return false
+        end
+        if not stdin_isatty() then
+            ctx.connect_code = io.stdin:read("*a")
+            if not ctx.connect_code or ctx.connect_code == '' then
+                logger:error("Failed to read from stdin")
+                return false
+            end
+        else
+            ctx.connect_code = nil
+        end
+    end
+    return true
+end
 
 local console_library = tntctl:register_library('console', {
     weight = 20

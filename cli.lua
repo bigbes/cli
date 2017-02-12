@@ -560,6 +560,8 @@ local function usage_header()
     logger:error("")
 end
 
+-- split long line into muple one's with max width of 80 charachters and
+-- prepends with depth spaces
 local function prepare_description(lines, depth)
     local fields = {}
     if lines ~= nil then
@@ -582,8 +584,8 @@ local function prepare_description(lines, depth)
         else
             line = lines:sub(0, 80 - depth + 1):match("(.*%s)[^%s]*")
         end
-        if #line == 0 then
-            line = lines:match(0, 80 - depth) .. '-'
+        if not line or #line == 0 then
+            line = lines:sub(0, 80 - depth) .. '-'
         end
         lines = lines:sub(#line + 1)
         line = line:gsub("^%s*(.-)%s*$", "%1")
@@ -613,29 +615,52 @@ constructors.method = function(name, cb, description)
             end,
             usage = function(self, opts)
                 opts = opts or {}
-                opts.depth = opts.depth or 0
-                -- TODO: write usage function
-                -- logger:write('%susage %s [weight %d]',
-                --              string.rep(' ', opts.depth or 0),
-                --              self.name, self.description.weight or 0)
-                local header      = self.description.header
-                local description = self.description.description
-                if type(header) ~= 'table' then
-                    header = { header }
+                opts.depth = opts.depth
+
+                local header = self.description.header
+                if tarantoolctl.linkmode then
+                    if not self.description.linkmode then
+                        return
+                    end
+                    header = self.description.linkmode
                 end
+                if type(header) ~= 'table' then header = { header } end
                 for _, line in ipairs(header) do
-                    logger:write(
-                        string.rep(' ', opts.depth) .. line,
-                        tarantoolctl.program_name
-                    )
+                    line = line:format(tarantoolctl.program_name)
+                    local is_first_line = false
+                    for _, line in ipairs(
+                        prepare_description(line, opts.depth)
+                    ) do
+                        if is_first_line then line = '    ' .. line end
+                        logger:write(line)
+                        is_first_line = true
+                    end
                 end
+
+                opts.detailed = opts.detailed or tarantoolctl.help
                 if opts.detailed then
+                    local description = self.description.description
+                    logger:write("")
                     for _, line in ipairs(
                         prepare_description(description, opts.depth + 2)
                     ) do
                         logger:write(line)
                     end
+                    local arguments   = self.description.arguments
                     logger:write("")
+                    if arguments then
+                        for _, arg in ipairs(arguments) do
+                            logger:write('%s%s',
+                                         string.rep(' ', opts.depth + 2),
+                                         arg[1])
+                            for _, line in ipairs(
+                                prepare_description(arg[2], opts.depth + 4)
+                            ) do
+                                logger:write(line)
+                            end
+                        end
+                        logger:write("")
+                    end
                 end
                 return false
             end,
@@ -682,32 +707,49 @@ constructors.library = function(name, description)
             end,
             usage = function(self, opts)
                 opts = opts or {}
-                opts.detailed = opts.detailed or false
                 opts.depth    = opts.depth    or 0
-                opts.header   = opts.header   or false
-
+                opts.detailed = opts.detailed or tarantoolctl.help
                 local nested = opts.nested
+
+                if tarantoolctl.linkmode then
+                    local have_linkmode = false
+                    for name, method in pairs(self.methods) do
+                        if method.description.linkmode then
+                            have_linkmode = true
+                            break
+                        end
+                    end
+                    if not have_linkmode then
+                        if not opts.nested then
+                            logger:error("%s library doesn't support link mode",
+                                        self.name)
+                        end
+                        return
+                    end
+                end
+
                 if self.command == nil then
                     if nested then
                         logger:write("%s[%s library]",
-                                    string.rep(' ', opts.depth),
-                                    self.name, self.description.weight)
-                        logger:write("")
+                                     string.rep(' ', opts.depth),
+                                     self.name, self.description.weight)
                     else
                         logger:error("Expected command name, got nothing")
-                        logger:error("")
-                        usage_header()
                     end
-                    opts.depth = opts.depth + 4
-                    for _, val in ipairs(self:return_sorted()) do
-                        val:usage(opts)
-                    end
-                    opts.depth = opts.depth - 4
                 elseif self.methods[self.command] == nil then
                     logger:error("Command '%s' isn't found in module '%s'",
                                  self.command, name)
-                elseif self.command == nil then
                 end
+                if not nested then
+                    logger:error("")
+                    usage_header()
+                end
+                opts.depth = opts.depth + 4
+                for _, val in ipairs(self:return_sorted()) do
+                    val:usage(opts)
+                    opts.first = true
+                end
+                opts.depth = opts.depth - 4
                 -- TODO: write usage function
                 return false
             end,
@@ -717,10 +759,11 @@ constructors.library = function(name, description)
                     return self:usage()
                 end
                 local wrapper = self.methods[self.command]
-                if wrapper == nil then
+                if wrapper == nil or tarantoolctl.help then
                     return self:usage()
                 end
                 do -- prepare context here
+                    self.ctx.command_name = self.command
                     self.ctx.positional_arguments = {}
                     self.ctx.keyword_arguments    = {}
                     for k, v in pairs(tarantoolctl.arguments) do
@@ -823,8 +866,8 @@ tarantoolctl = setmetatable({
             opts.nested = true
             local lsorted = #sorted
             fun.iter(sorted):enumerate():each(function(n, val)
-                self.libraries[val[2]]:usage(opts)
-                if n ~= lsorted then logger:write("") end
+                local rv = self.libraries[val[2]]:usage(opts)
+                if rv ~= nil then logger:write("") end
             end)
             opts.depth = opts.depth - 4
             return false
@@ -910,7 +953,7 @@ local function runner(tctl)
         tctl.verbosity = {tctl.verbosity}
     end
     tctl.verbosity    = #tctl.verbosity
-    tctl.help         = (tctl.arguments.h or tctl.arguments.help) and true or false
+    tctl.help         = ((tctl.arguments.h or tctl.arguments.help) and true) or false
     tctl.linkmode     = is_linkmode(tctl.program_name)
 
     -- we shouldn't throw errors until this place.

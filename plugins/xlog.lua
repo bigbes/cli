@@ -264,7 +264,7 @@ local function xlog_prepare_context(ctl, ctx)
     if ctx.command == 'play' then
         local host = table.remove(ctx.positional_arguments, 1)
         if host == nil then
-            logger:error('empty URI is provided')
+            logger:error('Empty URI is provided')
             return false
         end
         ctx.remote_host = host
@@ -272,7 +272,7 @@ local function xlog_prepare_context(ctl, ctx)
     ctx.files = {}
     for _, name in ipairs(ctx.positional_arguments) do
         if fio.stat(name) == nil then
-            logger:error("file %s expected to be read, but can't be found")
+            logger:error("File %s expected to be read, but can't be found")
             if ctx.keyword_arguments.force ~= true then
                 return false
             end
@@ -281,7 +281,7 @@ local function xlog_prepare_context(ctl, ctx)
         end
     end
     if #ctx.files == 0 then
-        logger:error("no xlog/snap files are provided")
+        logger:error("No xlog/snap files are provided")
         return false
     end
     return true
@@ -294,14 +294,13 @@ local xlog_library = tntctl:register_library('xlog', {
 xlog_library:register_prepare(xlog_prepare_context)
 
 xlog_library:register_method('cat', cat, {
-    description = [=[ Show contents of snapshot/xlog files.
-
-    * If --space=space_no is passed, then output'll be filtered by space number. May be passed more than once.
-    * If --show-system is passed, then contents of system space'll be showed.
-    * If --from=from_lsn is present, then show operations starting from given lsn.
-    * If --to=to_lsn is present, then show operations ending with given lsn.
-
-    Result is printed to stdout ]=],
+    description = [=[ Show contents of snapshot/xlog files. Result is printed to stdout ]=],
+    arguments = {
+        {"--space=space_no ..", "Filter by space number. May be passed more than once." },
+        {"--show-system",       "Show contents of system spaces"                        },
+        {"--from=lsn-from",     "Ignore operation with LSN lower than lsn-from"         },
+        {"--to=lsn-to",         "Show operations with LSN lower than lsn-to "           }
+    },
     header =
         "%s cat <filename>.. [--space=space_no ..] [--show-system]" ..
         " [--from=from_lsn] [--to=to_lsn]",
@@ -310,16 +309,16 @@ xlog_library:register_method('cat', cat, {
 }
 )
 xlog_library:register_method('play', play, {
-    description =
-    [=[ Play contents of snapshot/xlog files on another Tarantool instance.
-
-    * If --space=space_no is passed, then output'll be filtered by space number. May be passed more than once.
-    * If --show-system is passed, then contents of system space'll be showed.
-    * If --from=from_lsn is present, then show operations starting from given lsn.
-    * If --to=to_lsn is present, then show operations ending with given lsn. ]=],
+    description = [=[ Play contents of snapshot/xlog files on another Tarantool instance. ]=],
+    arguments = {
+        {"--space=space_no ..", "Filter by space number. May be passed more than once." },
+        {"--show-system",       "Play contents of system spaces"                        },
+        {"--from=lsn-from",     "Ignore operation with LSN lower than lsn-from"         },
+        {"--to=lsn-to",         "Play operations with LSN lower than lsn-to "           }
+    },
     header =
         "%s play <instance_uri> <filename>.. [--space=space_no ..]" ..
-        " [--show-system] [--from=from_lsn] [--to=to_lsn]",
+        " [--show-system] [--from=lsn-from] [--to=lsn-to]",
     weight = 20,
     exiting = true,
 })
