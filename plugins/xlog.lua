@@ -287,41 +287,39 @@ local function xlog_prepare_context(ctl, ctx)
     return true
 end
 
-local xlog_library = tntctl:register_library('xlog', {
-    weight = 30
-})
-
-xlog_library:register_prepare(xlog_prepare_context)
-
+local xlog_library = tntctl:register_library('xlog', { weight = 30 })
+xlog_library:register_prepare('xlog', xlog_prepare_context)
 xlog_library:register_method('cat', cat, {
-    description = [=[ Show contents of snapshot/xlog files. Result is printed to stdout ]=],
-    arguments = {
-        {"--space=space_no ..", "Filter by space number. May be passed more than once." },
-        {"--show-system",       "Show contents of system spaces"                        },
-        {"--from=lsn-from",     "Ignore operation with LSN lower than lsn-from"         },
-        {"--to=lsn-to",         "Show operations with LSN lower than lsn-to "           }
+    help = {
+        description = [=[
+            Show contents of snapshot/xlog files. Result is printed to stdout
+        ]=],
+        arguments = {
+            {"--space=space_no ..", "Filter by space number. May be passed more than once." },
+            {"--show-system",       "Show contents of system spaces"                        },
+            {"--from=lsn-from",     "Ignore operation with LSN lower than lsn-from"         },
+            {"--to=lsn-to",         "Show operations with LSN lower than lsn-to "           }
+        },
+        header = "%s cat <filename>.. [--space=space_no..] [--show-system] " ..
+                 "[--from=from_lsn] [--to=to_lsn]",
     },
-    header =
-        "%s cat <filename>.. [--space=space_no ..] [--show-system]" ..
-        " [--from=from_lsn] [--to=to_lsn]",
-    weight = 10,
-    exiting = true,
-}
-)
-xlog_library:register_method('play', play, {
-    description = [=[ Play contents of snapshot/xlog files on another Tarantool instance. ]=],
-    arguments = {
-        {"--space=space_no ..", "Filter by space number. May be passed more than once." },
-        {"--show-system",       "Play contents of system spaces"                        },
-        {"--from=lsn-from",     "Ignore operation with LSN lower than lsn-from"         },
-        {"--to=lsn-to",         "Play operations with LSN lower than lsn-to "           }
-    },
-    header =
-        "%s play <instance_uri> <filename>.. [--space=space_no ..]" ..
-        " [--show-system] [--from=lsn-from] [--to=lsn-to]",
-    weight = 20,
     exiting = true,
 })
-
+xlog_library:register_method('play', play, {
+    help = {
+        description = [=[
+            Play contents of snapshot/xlog files on another Tarantool instance
+        ]=],
+        arguments = {
+            {"--space=space_no ..", "Filter by space number. May be passed more than once." },
+            {"--show-system",       "Play contents of system spaces"                        },
+            {"--from=lsn-from",     "Ignore operation with LSN lower than lsn-from"         },
+            {"--to=lsn-to",         "Play operations with LSN lower than lsn-to "           }
+        },
+        header = "%s play <instance_uri> <filename>.. [--space=space_no..] " ..
+                 "[--show-system] [--from=lsn-from] [--to=lsn-to]",
+    },
+    exiting = true,
+})
 tntctl:register_alias('cat',  'xlog.cat' )
 tntctl:register_alias('play', 'xlog.play')

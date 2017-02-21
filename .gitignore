@@ -1,2 +1,5 @@
 .tarantoolctl
 .*.swp
+lib
+log
+run
